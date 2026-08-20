@@ -41,6 +41,13 @@ class WordTextReplacerSingle:
         # Header frame with info icon
         header_frame = tk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 15))
+
+        template_merge_btn = tk.Button(
+            header_frame, text="Template Merge / 模板批量生成",
+            command=self.open_template_merge,
+            bg="#673ab7", fg="white", font=("Arial", 10, "bold")
+        )
+        template_merge_btn.pack(side=tk.LEFT)
         
         # Invisible spacer to push info icon to the right
         spacer = tk.Label(header_frame, text="")
@@ -248,6 +255,19 @@ class WordTextReplacerSingle:
         self.search_text.focus()
 
     # NEW: NBSP Processing Methods
+    def open_template_merge(self):
+        """Open the independent Word template + Excel merge workflow."""
+        try:
+            from template_merge_gui import TemplateMergeWindow
+            TemplateMergeWindow(self.root, HAS_WIN32COM)
+        except ImportError as exc:
+            messagebox.showerror(
+                "Missing dependency",
+                "Template Merge requires python-docx and openpyxl.\n\n"
+                "Install dependencies with: pip install -r requirements.txt\n\n"
+                f"Details: {exc}"
+            )
+
     def preprocess_text_with_nbsp(self, text):
         """Convert _nbsp_ placeholders to actual non-breaking spaces"""
         return text.replace('_nbsp_', '\u00A0')

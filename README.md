@@ -22,6 +22,42 @@
 ### Option 3: You're a developer? Use the code and have fun! 
 It's just one Python file — download it from [**src**](src) and play around with it. :)
 
+Install and run the current source version:
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python src\word_text_replacer_single_with_add.py
+```
+
+## 🧩 Template Merge / 模板批量生成
+
+The original Standard Replace and Advanced Replace workflows are unchanged. The
+new **Template Merge / 模板批量生成** button opens a separate workflow that:
+
+- scans `{{field}}` variables from a `.docx`/`.docm` template;
+- reads one output document per `.xlsx` data row;
+- automatically matches variables to Excel headers and permits manual mapping;
+- previews the first five rows, including generated filenames;
+- preserves run formatting when a field is split across multiple Word runs;
+- handles body text, tables, headers, footers, hyperlink display text and text
+  boxes in Standard mode;
+- optionally uses one reusable Microsoft Word COM instance for comprehensive
+  handling of Word story ranges, including footnotes and endnotes;
+- isolates per-row errors and avoids overwriting duplicate filenames.
+
+Standard template mode is cross-platform but `.doc` files require Advanced Word
+COM mode. Advanced mode requires Windows, Microsoft Word and `pywin32`.
+
+Build the Windows executable from the repository root:
+
+```bat
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pyinstaller WordTextReplacer.spec
+```
+
 ## ✨ Features and best practices
 
 | Feature | Standard Replace | Advanced Replace |
@@ -139,4 +175,3 @@ The tool is free and I am happy with sharing it with whoever wants to use it. If
 ⬛🟦⬛ **Forza Inter!** ⬛🟦⬛ 
 
 *Made with enthusiasm for efficient document processing.*
-
