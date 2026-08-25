@@ -25,6 +25,12 @@ QFrame[isCard="true"] {
     border-radius: 8px;
 }
 
+QFrame[isActionBar="true"] {
+    background-color: @card_bg@;
+    border: none;
+    border-top: 1px solid @border_subtle@;
+}
+
 QLabel#CardTitle {
     font-size: 14px;
     font-weight: 600;
@@ -41,6 +47,12 @@ QLabel#AppTitle {
     font-weight: 700;
     color: @text_primary@;
 }
+
+QLabel[themeTone="secondary"] { color: @text_secondary@; }
+QLabel[themeTone="accent"] { color: @accent@; }
+QLabel[themeTone="success"] { color: @success@; }
+QLabel[themeTone="warning"] { color: @warning@; }
+QLabel[themeTone="error"] { color: @error@; }
 
 /* Primary Accent Button */
 QPushButton[isPrimary="true"] {

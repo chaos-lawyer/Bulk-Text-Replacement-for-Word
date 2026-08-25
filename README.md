@@ -44,10 +44,11 @@ python src\app.py
 - **Non-Breaking Spaces (NBSP)**: Automatically cleans soft hyphens, zero-width spaces, and normalizes `\u00a0`.
 
 ### 2. 📑 Template Batch Merge (`模板批量生成`)
-- **Strict 3-Step Guided Workflow**:
-  - **Step 1**: Choose Word template (`.docx` / `.docm`), Excel or CSV data source (`.xlsx` / `.csv` / `.xlsm`), output folder, and dynamic filename rule (e.g. `{{Client}}-{{ContractNo}}.docx` or `{{序号}}-{{Client}}.docx`). Source files are verified on disk before scanning.
-  - **Step 2**: Interactive 4-column field mapping table with dropdown selection (`QTableView` + `ComboBoxDelegate`) mapping `{{Variable}}` to table columns, plus editable empty-field default fallbacks. Changing output folder/filename rule preserves existing field mappings.
-  - **Step 3**: Instant preview of first 5 rows and asynchronous batch generation with real-time log and platform fixed-width typography.
+- **Strict 4-Step Guided Workflow**:
+  - **Step 1：选择模板与数据**: Add one or multiple Word templates (`.docx` / `.docm` / `.doc`) via drag-and-drop capsules, along with Excel/CSV data source (`.xlsx` / `.csv` / `.xlsm`).
+  - **Step 2：字段映射与缺省设置**: Interactive field mapping table with dropdown selection (`QTableView` + `ComboBoxDelegate`) mapping `{{Variable}}` to table columns, plus 3 empty field fallback strategies (keep variable, replace with empty, or custom text).
+  - **Step 3：输出规则与路径变量**: Configure per-template output folder and filename rules (e.g. `D:/Output/{{地区}}/{{模板名}}-{{数据序号}}`) with an embedded auto-scaling variable insertion panel.
+  - **Step 4：生成与日志**: Instant preview of planned merge jobs with conflict resolution and asynchronous batch generation with real-time log.
 - **Safe & Non-Destructive**: Never alters template files and automatically avoids duplicate output filename collisions.
 
 ### 3. 📑 Multi-Document Differentiated Replacement (`多文档匹配替换`)
@@ -103,10 +104,10 @@ Bulk-Text-Replacement-for-Word/
 │       ├── main_window.py             # QMainWindow with top navigation & status bar
 │       ├── pages/                     # ReplacePage, MergePage & MultiDocPage
 │       ├── models/                    # FileListModel, FieldMappingModel, MultiDocMappingModel
-│       ├── delegates/                 # MappingComboDelegate
-│       ├── widgets/                   # FluentCard, SegmentedNav, FluentStatusBar
+│       ├── delegates/                 # MappingComboDelegate, EmptyFieldDelegate
+│       ├── widgets/                   # FluentCard, SegmentedNav, FluentStatusBar, FileCapsuleEdit, ResizableTableContainer, VariableInsertPanel
 │       └── theme/                     # Token definitions & QSS stylesheets
-├── tests/                             # Unit & integration test suite (54 automated tests)
+├── tests/                             # Unit & integration test suite (112 automated tests)
 
 ├── WordTextReplacer.spec              # Windows PyInstaller standalone spec
 ├── WordTextReplacer_mac.spec          # macOS PyInstaller .app bundle spec

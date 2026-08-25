@@ -5,27 +5,25 @@ from __future__ import annotations
 import os
 
 from application.replace_service import ReplaceService
-from application.task_models import ServiceResult, TaskProgress, TaskState
+from application.task_models import ServiceResult, TaskState
 from application.workers import TaskWorker
 from core.models import BatchProcessResult
 from core.replacer_core import count_occurrences, get_document_text
 from platform_adapter.capabilities import CAPABILITIES
 from ui.dialogs.result_dialog import ResultDialog
 from ui.models.file_list_model import FileListModel
-from ui.theme.theme_manager import THEME
+from ui.theme.theme_manager import set_theme_tone
 from ui.widgets.card import FluentCard
 
 try:
     from PySide6.QtCore import Qt, QThreadPool, Signal
     from PySide6.QtWidgets import (
         QApplication,
-        QButtonGroup,
         QCheckBox,
         QFileDialog,
         QFrame,
         QGridLayout,
         QHBoxLayout,
-        QHeaderView,
         QLabel,
         QListView,
         QMessageBox,
@@ -128,7 +126,8 @@ if HAS_QT:
             btn_row.addStretch()
 
             self.file_count_lbl = QLabel("已选 0 个文件")
-            self.file_count_lbl.setStyleSheet(f"color: {THEME.tokens.text_secondary}; font-size: 12px;")
+            self.file_count_lbl.setStyleSheet("font-size: 12px;")
+            set_theme_tone(self.file_count_lbl, "secondary")
             self.file_count_lbl.setAccessibleName("已选文件计数")
             btn_row.addWidget(self.file_count_lbl)
 
@@ -193,7 +192,8 @@ if HAS_QT:
             self.card_inputs.addWidget(self.txt_replace)
 
             self.match_count_lbl = QLabel("")
-            self.match_count_lbl.setStyleSheet(f"color: {THEME.tokens.text_secondary}; font-style: italic; font-size: 12px;")
+            self.match_count_lbl.setStyleSheet("font-style: italic; font-size: 12px;")
+            set_theme_tone(self.match_count_lbl, "secondary")
             self.match_count_lbl.setAccessibleName("实时匹配统计标签")
             self.card_inputs.addWidget(self.match_count_lbl)
 
@@ -255,13 +255,7 @@ if HAS_QT:
 
             # ---------------- Fixed Bottom Action Bar (Outside ScrollArea) ----------------
             action_container = QFrame(self)
-            action_container.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {THEME.tokens.card_bg};
-                    border-top: 1px solid {THEME.tokens.border_subtle};
-                    padding: 8px 18px;
-                }}
-            """)
+            action_container.setProperty("isActionBar", True)
             action_bar = QHBoxLayout(action_container)
             action_bar.setContentsMargins(0, 0, 0, 0)
             action_bar.setSpacing(10)
@@ -410,16 +404,22 @@ if HAS_QT:
                 QMessageBox.warning(self, "提示", "请先添加至少一个 Word 文档。")
                 return
 
+            coordinator = TaskCoordinator.instance()
+            if not coordinator.can_start_task(is_write=False):
+                QMessageBox.warning(self, "提示", "已有后台任务正在执行中，请稍后再试。")
+                return
+
             self._set_ui_busy(True)
             self.statusMessage.emit("正在扫描超链接...", "running")
 
             worker = TaskWorker(ReplaceService.scan_links, file_paths=paths)
             self._active_worker = worker
+            task_id = coordinator.register_task(worker, is_write=False, description="检查超链接")
 
             worker.signals.progress.connect(self.statusProgress.emit)
             worker.signals.result.connect(self._on_links_scanned)
             worker.signals.error.connect(self._on_task_error)
-            worker.signals.finished.connect(lambda: self._set_ui_busy(False))
+            worker.signals.finished.connect(lambda: (self._set_ui_busy(False), coordinator.release_task(task_id)))
             self._thread_pool.start(worker)
 
         def _on_links_scanned(self, res: ServiceResult[list[dict]]):
@@ -434,10 +434,12 @@ if HAS_QT:
 
             paths = self.file_model.get_all_paths()
             results = res.data or []
-            self.statusMessage.emit("超链接扫描完成", "success")
+            is_warning = (res.state == TaskState.WARNING)
+            self.statusMessage.emit("超链接扫描完成（部分文件存在警告）" if is_warning else "超链接扫描完成", "warning" if is_warning else "success")
 
             total_links = sum(r["count"] for r in results)
             files_with_links = sum(1 for r in results if r["count"] > 0)
+            errors = [r for r in results if r.get("error")]
 
             lines = [
                 "文档超链接扫描报告",
@@ -445,15 +447,20 @@ if HAS_QT:
                 f"扫描文件总数：{len(paths)}",
                 f"含超链接文件：{files_with_links}",
                 f"超链接总数量：{total_links}",
-                "=" * 50,
-                "",
             ]
+            if errors:
+                lines.append(f"扫描异常文件：{len(errors)}")
+            lines.extend(["=" * 50, ""])
+
             for r in results:
-                lines.append(f"📄 {r['filename']}：{r['count']} 个链接")
-                for url in r["urls"][:5]:
-                    lines.append(f"   • {url}")
-                if len(r["urls"]) > 5:
-                    lines.append(f"   • ... 以及其他 {len(r['urls']) - 5} 个链接")
+                if r.get("error"):
+                    lines.append(f"❌ {r['filename']}：读取失败 ({r['error']})")
+                else:
+                    lines.append(f"📄 {r['filename']}：{r['count']} 个链接")
+                    for url in r["urls"][:5]:
+                        lines.append(f"   • {url}")
+                    if len(r["urls"]) > 5:
+                        lines.append(f"   • ... 以及其他 {len(r['urls']) - 5} 个链接")
                 lines.append("")
 
             if total_links > 0:
@@ -461,9 +468,9 @@ if HAS_QT:
 
             dialog = ResultDialog(
                 title="超链接检查结果",
-                summary_text=f"共扫描 {len(paths)} 个文档，发现 {total_links} 处超链接。",
+                summary_text=f"共扫描 {len(paths)} 个文档，发现 {total_links} 处超链接。" + (f"（{len(errors)} 个文件读取异常）" if errors else ""),
                 details_text="\n".join(lines),
-                is_success=True,
+                is_success=not bool(errors),
                 parent=self,
             )
             dialog.exec()
@@ -473,12 +480,17 @@ if HAS_QT:
         def preview_changes(self):
             paths = self.file_model.get_all_paths()
             search_text = self.txt_search.toPlainText().rstrip("\n")
-            err = ReplaceService.validate_inputs(paths, search_text)
+            mode = "full" if self.rb_full.isChecked() else "fast"
+            err = ReplaceService.validate_inputs(paths, search_text, mode=mode)
             if err:
                 QMessageBox.warning(self, "提示", err)
                 return
 
-            mode = "full" if self.rb_full.isChecked() else "fast"
+            coordinator = TaskCoordinator.instance()
+            if not coordinator.can_start_task(is_write=False):
+                QMessageBox.warning(self, "提示", "已有后台任务正在执行中，请稍后再试。")
+                return
+
             case_sensitive = self.cb_case.isChecked()
             use_regex = self.cb_regex.isChecked() and mode == "fast"
             whole_word = self.cb_whole_word.isChecked()
@@ -496,11 +508,12 @@ if HAS_QT:
                 whole_word=whole_word,
             )
             self._active_worker = worker
+            task_id = coordinator.register_task(worker, is_write=False, description="生成替换预览")
 
             worker.signals.progress.connect(self.statusProgress.emit)
             worker.signals.result.connect(self._on_preview_finished)
             worker.signals.error.connect(self._on_task_error)
-            worker.signals.finished.connect(lambda: self._set_ui_busy(False))
+            worker.signals.finished.connect(lambda: (self._set_ui_busy(False), coordinator.release_task(task_id)))
 
             self._thread_pool.start(worker)
 
@@ -550,13 +563,13 @@ if HAS_QT:
             paths = self.file_model.get_all_paths()
             search_text = self.txt_search.toPlainText().rstrip("\n")
             replace_text = self.txt_replace.toPlainText().rstrip("\n")
+            mode = "full" if self.rb_full.isChecked() else "fast"
 
-            err = ReplaceService.validate_inputs(paths, search_text)
+            err = ReplaceService.validate_inputs(paths, search_text, mode=mode)
             if err:
                 QMessageBox.warning(self, "提示", err)
                 return
 
-            mode = "full" if self.rb_full.isChecked() else "fast"
             mode_name = "完整模式" if mode == "full" else "快速模式"
             create_backup = self.cb_backup.isChecked()
             backup_hint = "（将创建 .backup 备份）" if create_backup else "（未勾选备份）"
@@ -576,8 +589,14 @@ if HAS_QT:
             use_regex = self.cb_regex.isChecked() and mode == "fast"
             whole_word = self.cb_whole_word.isChecked()
 
+            from application.task_coordinator import TaskCoordinator
+            coordinator = TaskCoordinator.instance()
+            if not coordinator.can_start_task(is_write=True):
+                QMessageBox.warning(self, "提示", "已有任务正在后台执行中，请稍后。")
+                return
+
             self._set_ui_busy(True)
-            self.statusMessage.emit("正在执行替换...", "running")
+            self.statusMessage.emit("正在批量替换...", "running")
 
             worker = TaskWorker(
                 ReplaceService.execute_replace,
@@ -591,11 +610,12 @@ if HAS_QT:
                 create_backup=create_backup,
             )
             self._active_worker = worker
+            task_id = coordinator.register_task(worker, is_write=True, description="批量替换文档文本")
 
             worker.signals.progress.connect(self.statusProgress.emit)
             worker.signals.result.connect(self._on_replace_finished)
             worker.signals.error.connect(self._on_task_error)
-            worker.signals.finished.connect(lambda: self._set_ui_busy(False))
+            worker.signals.finished.connect(lambda: (self._set_ui_busy(False), coordinator.release_task(task_id)))
 
             self._thread_pool.start(worker)
 

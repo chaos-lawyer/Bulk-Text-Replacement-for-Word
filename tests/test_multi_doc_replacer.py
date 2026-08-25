@@ -57,7 +57,8 @@ class MultiDocReplacerTests(unittest.TestCase):
 
     def test_scan_documents_variables(self):
         file_paths = [self.doc1_path, self.doc2_path, self.doc3_path]
-        doc_vars, all_vars = scan_documents_variables(file_paths)
+        doc_vars, all_vars, doc_errors = scan_documents_variables(file_paths)
+        self.assertEqual(len(doc_errors), 0)
 
         self.assertEqual(doc_vars[self.doc1_path], ["甲方名称", "乙方名称", "合同金额"])
         self.assertEqual(doc_vars[self.doc2_path], ["签署人", "甲方名称"])

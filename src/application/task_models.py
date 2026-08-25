@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
@@ -11,8 +11,6 @@ T = TypeVar("T")
 
 
 class TaskState(Enum):
-    IDLE = "idle"
-    RUNNING = "running"
     SUCCESS = "success"
     WARNING = "warning"
     FAILED = "failed"
@@ -31,10 +29,6 @@ class CancellationToken:
     @property
     def is_cancelled(self) -> bool:
         return self._cancelled.is_set()
-
-    def reset(self) -> None:
-        self._cancelled.clear()
-
 
 @dataclass
 class TaskProgress:
@@ -56,4 +50,3 @@ class ServiceResult(Generic[T]):
     data: T | None = None
     error: str = ""
     state: TaskState = TaskState.SUCCESS
-    metrics: dict[str, Any] = field(default_factory=dict)

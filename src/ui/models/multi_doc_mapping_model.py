@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import Mapping
-
 from core.models import ExcelData, MultiDocItem
 
 try:
@@ -187,6 +185,7 @@ if HAS_QT:
             self,
             all_vars: list[str],
             doc_vars_map: dict[str, list[str]],
+            doc_errors: dict[str, str] | None = None,
         ) -> None:
             self.beginResetModel()
             self._variables = list(all_vars)
@@ -199,19 +198,35 @@ if HAS_QT:
                 lookup[os.path.normpath(k)] = v
                 lookup[os.path.normcase(os.path.abspath(k))] = v
 
+            err_lookup: dict[str, str] = {}
+            if doc_errors:
+                for k, err in doc_errors.items():
+                    err_lookup[k] = err
+                    err_lookup[os.path.abspath(k)] = err
+                    err_lookup[os.path.normpath(k)] = err
+                    err_lookup[os.path.normcase(os.path.abspath(k))] = err
+
             for item in self._items:
                 norm_fp = os.path.normcase(os.path.abspath(item.file_path))
-                vars_for_item = (
-                    lookup.get(norm_fp)
-                    or lookup.get(item.file_path)
-                    or lookup.get(os.path.abspath(item.file_path))
-                    or lookup.get(os.path.normpath(item.file_path))
-                    or []
+                err_msg = (
+                    err_lookup.get(norm_fp)
+                    or err_lookup.get(item.file_path)
+                    or err_lookup.get(os.path.abspath(item.file_path))
                 )
-                item.detected_variables = list(vars_for_item)
-                item.status = self._compute_status(item)
+                if err_msg:
+                    item.detected_variables = []
+                    item.status = f"❌ 扫描失败: {err_msg}"
+                else:
+                    vars_for_item = (
+                        lookup.get(norm_fp)
+                        or lookup.get(item.file_path)
+                        or lookup.get(os.path.abspath(item.file_path))
+                        or lookup.get(os.path.normpath(item.file_path))
+                        or []
+                    )
+                    item.detected_variables = list(vars_for_item)
+                    item.status = self._compute_status(item)
             self.endResetModel()
-
 
         def import_table_data(self, excel_data: ExcelData, match_by_header: bool = True) -> int:
             """Import Excel/CSV rows into multi-document items."""
@@ -225,7 +240,6 @@ if HAS_QT:
             header_map = {}
             for h in headers_clean:
                 header_map[h] = h
-                # Also strip {{ and }} if present
                 if h.startswith("{{") and h.endswith("}}"):
                     header_map[h[2:-2].strip()] = h
 
@@ -234,23 +248,24 @@ if HAS_QT:
                     break
 
                 row_dict = excel_data.rows[doc_idx]
-                for var in self._variables:
+                for var_pos, var in enumerate(self._variables):
                     target_header = None
                     if match_by_header:
                         if var in header_map:
                             target_header = header_map[var]
                         elif var in row_dict:
                             target_header = var
+                    else:
+                        if var_pos < len(headers_clean):
+                            target_header = headers_clean[var_pos]
 
                     if target_header is not None and target_header in row_dict:
                         val = str(row_dict[target_header]).strip()
                         item.replacements[var] = val
-                    elif not match_by_header:
-                        # Sequential alignment fallback
-                        var_pos = self._variables.index(var)
-                        if var_pos < len(headers_clean):
-                            col_header = headers_clean[var_pos]
-                            item.replacements[var] = str(row_dict.get(col_header, "")).strip()
+                    elif not match_by_header and var_pos < len(headers_clean):
+                        target_h = headers_clean[var_pos]
+                        val = str(row_dict.get(target_h, "")).strip()
+                        item.replacements[var] = val
 
                 item.status = self._compute_status(item)
                 filled_count += 1

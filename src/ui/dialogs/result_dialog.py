@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from platform_adapter.file_manager import open_folder
+from ui.theme.theme_manager import set_theme_tone
 
 try:
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QFontDatabase
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
@@ -62,9 +62,9 @@ if HAS_QT:
             summary_layout.setSpacing(12)
 
             status_icon = "✓" if is_success else "✕"
-            icon_color = "#0F7B0F" if is_success else "#C42B1C"
             icon_lbl = QLabel(status_icon)
-            icon_lbl.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {icon_color};")
+            icon_lbl.setStyleSheet("font-size: 20px; font-weight: bold;")
+            set_theme_tone(icon_lbl, "success" if is_success else "error")
             summary_layout.addWidget(icon_lbl)
 
             summary_lbl = QLabel(summary_text)

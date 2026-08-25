@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import inspect
-import sys
 from typing import Any, Callable
 
-from application.task_models import CancellationToken, TaskProgress
+from application.task_models import CancellationToken
 
 try:
-    from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+    from PySide6.QtCore import QObject, QRunnable, Signal
 
     HAS_QT = True
 except ImportError:
@@ -21,9 +20,7 @@ if HAS_QT:
     class WorkerSignals(QObject):
         """Defines signals available from a running worker thread."""
 
-        started = Signal()
         progress = Signal(object)  # TaskProgress
-        data = Signal(object)      # Intermediate data chunk
         result = Signal(object)    # Final ServiceResult or return value
         error = Signal(str)        # Error message string
         finished = Signal()        # Triggered on completion
@@ -68,14 +65,13 @@ if HAS_QT:
                 self.signals.progress.emit(args[0])
 
         def run(self) -> None:
-            self.signals.started.emit()
-            call_kwargs = dict(self.kwargs)
-            if self._inject_progress and "progress_cb" not in call_kwargs:
-                call_kwargs["progress_cb"] = self._handle_progress
-            if self._inject_cancel and "cancel_token" not in call_kwargs:
-                call_kwargs["cancel_token"] = self.cancel_token
-
             try:
+                call_kwargs = dict(self.kwargs)
+                if self._inject_progress and "progress_cb" not in call_kwargs:
+                    call_kwargs["progress_cb"] = self._handle_progress
+                if self._inject_cancel and "cancel_token" not in call_kwargs:
+                    call_kwargs["cancel_token"] = self.cancel_token
+
                 res = self.fn(*self.args, **call_kwargs)
                 self.signals.result.emit(res)
             except Exception as exc:

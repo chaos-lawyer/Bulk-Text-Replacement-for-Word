@@ -6,10 +6,11 @@ Decoupled from GUI frameworks for headless execution, automated testing, and thr
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+import shutil
+from typing import Callable, Optional
 
+from core.file_utils import create_safe_backup
 from core.models import MultiDocBatchResult, MultiDocItem
 from core.template_merge import (
     _com_replace_document,
@@ -17,6 +18,7 @@ from core.template_merge import (
     extract_template_fields_com,
     replace_docx_fields,
 )
+from core.word_com import WordAutomationSession
 
 
 def scan_documents_variables(
@@ -24,15 +26,17 @@ def scan_documents_variables(
     use_com: bool = False,
     progress: Optional[Callable[[int, int, str], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
-) -> tuple[dict[str, list[str]], list[str]]:
+) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
     """Extract template placeholder variables from multiple Word documents.
 
     Returns:
-        tuple[dict[str, list[str]], list[str]]:
+        tuple[dict[str, list[str]], list[str], dict[str, str]]:
             - Mapping of file_path -> list of detected variable names for that file
             - Deduplicated, order-preserved list of all unique variable names across all files
+            - Mapping of file_path -> error message (if scanning failed for that file)
     """
     doc_vars_map: dict[str, list[str]] = {}
+    doc_errors: dict[str, str] = {}
     all_vars_ordered: list[str] = []
     all_vars_seen: set[str] = set()
 
@@ -48,15 +52,21 @@ def scan_documents_variables(
         suffix = Path(path).suffix.lower()
         fields: list[str] = []
         try:
+            if not os.path.isfile(path):
+                raise FileNotFoundError("文件不存在或无法访问")
+
             if suffix == ".doc":
                 if use_com:
                     fields = extract_template_fields_com(path)
                 else:
-                    fields = []
+                    raise ValueError(".doc 格式需启用 Word COM 完整模式进行扫描")
             elif suffix in {".docx", ".docm"}:
                 fields = extract_template_fields(path)
-        except Exception:
+            else:
+                raise ValueError(f"不支持的格式：{suffix}")
+        except Exception as exc:
             fields = []
+            doc_errors[path] = str(exc)
 
         doc_vars_map[path] = fields
         for f in fields:
@@ -64,7 +74,7 @@ def scan_documents_variables(
                 all_vars_seen.add(f)
                 all_vars_ordered.append(f)
 
-    return doc_vars_map, all_vars_ordered
+    return doc_vars_map, all_vars_ordered, doc_errors
 
 
 def execute_multi_doc_preview(
@@ -81,7 +91,7 @@ def execute_multi_doc_preview(
         if output_folder_clean:
             dest_desc = str(Path(output_folder_clean, item.filename))
         else:
-            dest_desc = f"原文件：{item.filename}（将生成 .backup 备份）"
+            dest_desc = f"原文件：{item.filename}（将生成安全备份）"
 
         field_details = []
         for var in all_variables:
@@ -123,18 +133,6 @@ def execute_multi_doc_replace(
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    word_app = None
-    if use_com:
-        try:
-            import win32com.client
-
-            word_app = win32com.client.Dispatch("Word.Application")
-            word_app.Visible = False
-            word_app.DisplayAlerts = False
-            word_app.ScreenUpdating = False
-        except Exception as exc:
-            raise RuntimeError(f"初始化 Word COM 组件失败：{exc}") from exc
-
     total = len(items)
     success_docs = 0
     failed_docs = 0
@@ -143,7 +141,8 @@ def execute_multi_doc_replace(
     backup_files: list[str] = []
     used_output_names: set[str] = set()
 
-    try:
+    def _execute_items(word_app=None):
+        nonlocal success_docs, failed_docs
         for index, item in enumerate(items, start=1):
             if is_cancelled and is_cancelled():
                 break
@@ -179,8 +178,7 @@ def execute_multi_doc_replace(
                     doc_detail["destination"] = dest_path
                 else:
                     if create_backup:
-                        backup_path = item.file_path + ".backup"
-                        shutil.copy2(item.file_path, backup_path)
+                        backup_path = create_safe_backup(item.file_path)
                         backup_files.append(backup_path)
                         doc_detail["backup_path"] = backup_path
                     doc_detail["destination"] = item.file_path
@@ -224,13 +222,11 @@ def execute_multi_doc_replace(
             if progress:
                 progress(index, total, doc_detail)
 
-    finally:
-        if word_app is not None:
-            try:
-                word_app.ScreenUpdating = True
-                word_app.Quit()
-            except Exception:
-                pass
+    if use_com:
+        with WordAutomationSession() as word_app:
+            _execute_items(word_app)
+    else:
+        _execute_items(None)
 
     return MultiDocBatchResult(
         total_docs=total,

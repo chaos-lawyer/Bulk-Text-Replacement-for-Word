@@ -3,23 +3,21 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from application.multi_doc_service import MultiDocService
-from application.task_models import ServiceResult, TaskProgress, TaskState
+from application.task_models import ServiceResult, TaskState
 from application.workers import TaskWorker
-from core.models import ExcelData, MultiDocBatchResult, MultiDocItem
+from core.models import ExcelData, MultiDocBatchResult
 from core.template_merge import get_table_sheet_names, load_table_data
 from platform_adapter.capabilities import CAPABILITIES
 from ui.dialogs.result_dialog import ResultDialog
 from ui.models.multi_doc_mapping_model import MultiDocMappingModel
-from ui.theme.theme_manager import THEME
+from ui.theme.theme_manager import set_theme_tone
 from ui.widgets.card import FluentCard
 
 try:
     from PySide6.QtCore import Qt, QThreadPool, Signal
     from PySide6.QtWidgets import (
-        QButtonGroup,
         QCheckBox,
         QComboBox,
         QFileDialog,
@@ -121,7 +119,8 @@ if HAS_QT:
             doc_btn_row.addStretch()
 
             self.lbl_doc_count = QLabel("已选 0 个文档")
-            self.lbl_doc_count.setStyleSheet(f"color: {THEME.tokens.text_secondary}; font-size: 12px;")
+            self.lbl_doc_count.setStyleSheet("font-size: 12px;")
+            set_theme_tone(self.lbl_doc_count, "secondary")
             self.lbl_doc_count.setAccessibleName("已选文档数量统计")
             doc_btn_row.addWidget(self.lbl_doc_count)
 
@@ -230,7 +229,8 @@ if HAS_QT:
             self.card_step2.addLayout(tbl_tools_row)
 
             self.lbl_table_summary = QLabel("请添加 Word 文档并点击“自动扫描文档变量”以发现各文档中的变量。")
-            self.lbl_table_summary.setStyleSheet(f"color: {THEME.tokens.text_secondary}; font-size: 12px;")
+            self.lbl_table_summary.setStyleSheet("font-size: 12px;")
+            set_theme_tone(self.lbl_table_summary, "secondary")
             self.lbl_table_summary.setAccessibleName("多文档对应状态统计说明")
             self.card_step2.addWidget(self.lbl_table_summary)
 
@@ -303,13 +303,7 @@ if HAS_QT:
 
             # ---------------- Fixed Bottom Action Bar ----------------
             action_container = QFrame(self)
-            action_container.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {THEME.tokens.card_bg};
-                    border-top: 1px solid {THEME.tokens.border_subtle};
-                    padding: 8px 18px;
-                }}
-            """)
+            action_container.setProperty("isActionBar", True)
             action_bar = QHBoxLayout(action_container)
             action_bar.setContentsMargins(0, 0, 0, 0)
             action_bar.setSpacing(10)
@@ -493,7 +487,7 @@ if HAS_QT:
             vars_list = self.mapping_model.get_variables()
             if total_docs == 0:
                 self.lbl_table_summary.setText("请添加 Word 文档并点击“自动扫描文档变量”以发现各文档中的变量。")
-                self.lbl_table_summary.setStyleSheet(f"color: {THEME.tokens.text_secondary}; font-size: 12px;")
+                set_theme_tone(self.lbl_table_summary, "secondary")
                 return
 
             ready_count, _ = self.mapping_model.get_ready_metrics()
@@ -505,15 +499,29 @@ if HAS_QT:
                 f"已加载 {total_docs} 个文档，检测到变量：{vars_str}；"
                 f"数据就绪：{ready_count} / {total_docs} 份。"
             )
-            color = THEME.tokens.success if ready_count == total_docs and total_docs > 0 else THEME.tokens.text_secondary
             self.lbl_table_summary.setText(summary)
-            self.lbl_table_summary.setStyleSheet(f"color: {color}; font-size: 12px;")
+            set_theme_tone(
+                self.lbl_table_summary,
+                "success" if ready_count == total_docs and total_docs > 0 else "secondary",
+            )
 
         # ---------------- Asynchronous Scanning & Execution ----------------
 
         def scan_variables(self):
             items = self.mapping_model.get_items()
             if not items:
+                return
+
+            use_com = self.rb_full.isChecked()
+            err = MultiDocService.validate_inputs(items, use_com=use_com)
+            if err:
+                QMessageBox.warning(self, "提示", err)
+                return
+
+            from application.task_coordinator import TaskCoordinator
+            coordinator = TaskCoordinator.instance()
+            if not coordinator.can_start_task(is_write=False):
+                QMessageBox.warning(self, "提示", "已有后台任务正在执行中，请稍后再试。")
                 return
 
             file_paths = [item.file_path for item in items]
@@ -523,10 +531,10 @@ if HAS_QT:
             self._set_ui_busy(True)
             self.statusMessage.emit("正在扫描各文档变量...", "running")
 
-            def _scan_worker_fn(paths: list[str], use_com: bool, progress_cb=None, cancel_token=None):
+            def _scan_worker_fn(paths: list[str], com_flag: bool, progress_cb=None, cancel_token=None):
                 res = MultiDocService.scan_documents(
                     file_paths=paths,
-                    use_com=use_com,
+                    use_com=com_flag,
                     progress_cb=progress_cb,
                     cancel_token=cancel_token,
                 )
@@ -535,14 +543,15 @@ if HAS_QT:
             worker = TaskWorker(
                 _scan_worker_fn,
                 paths=file_paths,
-                use_com=self.rb_full.isChecked(),
+                com_flag=use_com,
             )
             self._active_worker = worker
+            task_id = coordinator.register_task(worker, is_write=False, description="扫描多文档变量")
 
             worker.signals.progress.connect(self.statusProgress.emit)
             worker.signals.result.connect(self._on_scan_finished)
             worker.signals.error.connect(self._on_task_error)
-            worker.signals.finished.connect(lambda: self._set_ui_busy(False))
+            worker.signals.finished.connect(lambda: (self._set_ui_busy(False), coordinator.release_task(task_id)))
 
             self._thread_pool.start(worker)
 
@@ -560,9 +569,12 @@ if HAS_QT:
                 QMessageBox.critical(self, "扫描失败", res.error)
                 return
 
-            doc_vars_map, all_vars = res.data
-            self.mapping_model.set_variables(all_vars, doc_vars_map)
-            self.statusMessage.emit(f"扫描完成：检测到 {len(all_vars)} 项变量", "success")
+            doc_vars_map, all_vars, doc_errors = res.data
+            self.mapping_model.set_variables(all_vars, doc_vars_map, doc_errors=doc_errors)
+            if doc_errors:
+                self.statusMessage.emit(f"扫描完成（{len(doc_errors)} 个文件存在异常）", "warning")
+            else:
+                self.statusMessage.emit(f"扫描完成：检测到 {len(all_vars)} 项变量", "success")
 
             # Adjust column widths
             if self.mapping_model.columnCount() > 0:
@@ -640,8 +652,9 @@ if HAS_QT:
             items = self.mapping_model.get_items()
             in_place = self.rb_inplace.isChecked()
             out_dir = self.edt_out_dir.text().strip() if not in_place else None
+            use_com = self.rb_full.isChecked()
 
-            err = MultiDocService.validate_inputs(items, in_place=in_place, output_folder=out_dir)
+            err = MultiDocService.validate_inputs(items, in_place=in_place, output_folder=out_dir, use_com=use_com)
             if err:
                 QMessageBox.warning(self, "提示", err)
                 return
@@ -670,23 +683,33 @@ if HAS_QT:
             if reply != QMessageBox.Yes:
                 return
 
+            from application.task_coordinator import TaskCoordinator
+            coordinator = TaskCoordinator.instance()
+            if not coordinator.can_start_task(is_write=True):
+                QMessageBox.warning(self, "提示", "已有任务正在后台执行中，请稍后。")
+                return
+
             self._set_ui_busy(True)
             self.statusMessage.emit("正在批量替换多文档...", "running")
 
+            import dataclasses
+            item_snapshots = [dataclasses.replace(item) for item in items]
+
             worker = TaskWorker(
                 MultiDocService.execute_batch_replace,
-                items=items,
+                items=item_snapshots,
                 in_place=in_place,
                 output_folder=out_dir,
                 create_backup=self.cb_backup.isChecked(),
-                use_com=self.rb_full.isChecked(),
+                use_com=use_com,
             )
             self._active_worker = worker
+            task_id = coordinator.register_task(worker, is_write=True, description="批量替换多文档")
 
             worker.signals.progress.connect(self.statusProgress.emit)
             worker.signals.result.connect(self._on_replace_finished)
             worker.signals.error.connect(self._on_task_error)
-            worker.signals.finished.connect(lambda: self._set_ui_busy(False))
+            worker.signals.finished.connect(lambda: (self._set_ui_busy(False), coordinator.release_task(task_id)))
 
             self._thread_pool.start(worker)
 

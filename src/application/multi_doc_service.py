@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Callable, Optional
 
 from application.task_models import CancellationToken, ServiceResult, TaskProgress, TaskState
+from core.format_policy import validate_batch_file_formats
 from core.models import MultiDocBatchResult, MultiDocItem
 from core.multi_doc_replacer import (
     execute_multi_doc_preview,
     execute_multi_doc_replace,
     scan_documents_variables,
 )
-from platform_adapter.capabilities import CAPABILITIES
 
 
 class MultiDocService:
@@ -24,16 +23,17 @@ class MultiDocService:
         items: list[MultiDocItem],
         in_place: bool = True,
         output_folder: str | None = None,
+        use_com: bool = False,
     ) -> str | None:
         if not items:
             return "请先添加至少一个待处理的 Word 文档。"
 
-        for item in items:
-            if not os.path.isfile(item.file_path):
-                return f"文件不存在：{item.file_path}"
-            suffix = Path(item.file_path).suffix.lower()
-            if CAPABILITIES.is_macos and suffix == ".doc":
-                return f"macOS 暂不支持旧版 .doc 格式文件：{item.filename}"
+        file_paths = [item.file_path for item in items]
+        ok, format_err = validate_batch_file_formats(
+            file_paths, mode="full" if use_com else "fast", operation="multi_doc"
+        )
+        if not ok:
+            return format_err
 
         if not in_place:
             if not output_folder or not output_folder.strip():
@@ -47,20 +47,15 @@ class MultiDocService:
         use_com: bool = False,
         progress_cb: Optional[Callable[[TaskProgress], None]] = None,
         cancel_token: Optional[CancellationToken] = None,
-    ) -> ServiceResult[tuple[dict[str, list[str]], list[str]]]:
+    ) -> ServiceResult[tuple[dict[str, list[str]], list[str], dict[str, str]]]:
         if not file_paths:
             return ServiceResult(success=False, error="请先添加待扫描的 Word 文档。", state=TaskState.FAILED)
 
-        for path in file_paths:
-            if not os.path.isfile(path):
-                return ServiceResult(success=False, error=f"文件不存在：{path}", state=TaskState.FAILED)
-            suffix = Path(path).suffix.lower()
-            if CAPABILITIES.is_macos and suffix == ".doc":
-                return ServiceResult(
-                    success=False,
-                    error=f"macOS 暂不支持旧版 .doc 格式文件：{os.path.basename(path)}",
-                    state=TaskState.FAILED,
-                )
+        ok, format_err = validate_batch_file_formats(
+            file_paths, mode="full" if use_com else "fast", operation="multi_doc"
+        )
+        if not ok:
+            return ServiceResult(success=False, error=format_err, state=TaskState.FAILED)
 
         if cancel_token and cancel_token.is_cancelled:
             return ServiceResult(success=False, error="任务已取消", state=TaskState.CANCELLED)
@@ -72,7 +67,7 @@ class MultiDocService:
         is_cancelled_fn = cancel_token.is_cancelled if cancel_token else None
 
         try:
-            doc_vars, all_vars = scan_documents_variables(
+            doc_vars, all_vars, doc_errors = scan_documents_variables(
                 file_paths=file_paths,
                 use_com=use_com,
                 progress=_inner_progress,
@@ -82,10 +77,23 @@ class MultiDocService:
             if cancel_token and cancel_token.is_cancelled:
                 return ServiceResult(success=False, error="任务已取消", state=TaskState.CANCELLED)
 
+            if doc_errors:
+                if len(doc_errors) == len(file_paths) and len(file_paths) > 0:
+                    err_summary = "\n".join(f"{os.path.basename(p)}: {e}" for p, e in doc_errors.items())
+                    return ServiceResult(
+                        success=False,
+                        data=(doc_vars, all_vars, doc_errors),
+                        error=f"全部文档扫描失败：\n{err_summary}",
+                        state=TaskState.FAILED,
+                    )
+                state = TaskState.WARNING
+            else:
+                state = TaskState.SUCCESS
+
             return ServiceResult(
                 success=True,
-                data=(doc_vars, all_vars),
-                state=TaskState.SUCCESS,
+                data=(doc_vars, all_vars, doc_errors),
+                state=state,
             )
         except Exception as exc:
             return ServiceResult(success=False, error=str(exc), state=TaskState.FAILED)
@@ -118,7 +126,7 @@ class MultiDocService:
         progress_cb: Optional[Callable[[TaskProgress], None]] = None,
         cancel_token: Optional[CancellationToken] = None,
     ) -> ServiceResult[MultiDocBatchResult]:
-        err = MultiDocService.validate_inputs(items, in_place=in_place, output_folder=output_folder)
+        err = MultiDocService.validate_inputs(items, in_place=in_place, output_folder=output_folder, use_com=use_com)
         if err:
             return ServiceResult(success=False, error=err, state=TaskState.FAILED)
 
@@ -130,10 +138,7 @@ class MultiDocService:
                 prog = TaskProgress.calculate(
                     current, total, f"正在处理：{doc_detail['filename']}", data=doc_detail
                 )
-                try:
-                    progress_cb(prog)
-                except TypeError:
-                    progress_cb(prog, doc_detail)  # type: ignore
+                progress_cb(prog)
 
         try:
             batch_res = execute_multi_doc_replace(
@@ -150,7 +155,13 @@ class MultiDocService:
                     success=False, data=batch_res, error="任务已取消", state=TaskState.CANCELLED
                 )
 
-            state = TaskState.WARNING if batch_res.failed_docs > 0 else TaskState.SUCCESS
+            if batch_res.total_docs > 0 and batch_res.success_docs == 0 and batch_res.errors:
+                return ServiceResult(
+                    success=False, data=batch_res, error="\n".join(batch_res.errors), state=TaskState.FAILED
+                )
+
+            state = TaskState.WARNING if batch_res.errors else TaskState.SUCCESS
             return ServiceResult(success=True, data=batch_res, state=state)
+
         except Exception as exc:
             return ServiceResult(success=False, error=str(exc), state=TaskState.FAILED)

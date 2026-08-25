@@ -5,8 +5,7 @@ from __future__ import annotations
 from platform_adapter.capabilities import CAPABILITIES
 
 try:
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
+    from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextBrowser, QVBoxLayout, QWidget
 
     HAS_QT = True
 except ImportError:

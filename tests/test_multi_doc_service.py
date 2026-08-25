@@ -49,7 +49,8 @@ class MultiDocServiceTests(unittest.TestCase):
         # Successful scan
         res = MultiDocService.scan_documents([self.doc_path])
         self.assertTrue(res.success)
-        doc_vars, all_vars = res.data
+        doc_vars, all_vars, doc_errors = res.data
+        self.assertEqual(len(doc_errors), 0)
         self.assertEqual(all_vars, ["客户姓名", "订单号"])
 
         # Pre-cancelled token

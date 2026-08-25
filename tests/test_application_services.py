@@ -5,6 +5,8 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -27,8 +29,6 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertFalse(token.is_cancelled)
         token.cancel()
         self.assertTrue(token.is_cancelled)
-        token.reset()
-        self.assertFalse(token.is_cancelled)
 
     def test_task_progress_calculation(self):
         p = TaskProgress.calculate(5, 10, "测试中")
@@ -104,7 +104,6 @@ class ApplicationServiceTests(unittest.TestCase):
             snippets = MergeService.generate_preview_snippets(
                 template_path=str(tmpl),
                 excel_data=data,
-                fields=fields,
                 mapping=mapping,
                 output_folder=out_folder,
                 filename_rule="{{甲方名称}}-合同.docx",
@@ -143,20 +142,20 @@ class ApplicationServiceTests(unittest.TestCase):
             excel_rows=[2],
         )
         fields = ["保留", "清空", "自定义"]
-        snippets = MergeService.generate_preview_snippets(
-            template_path="template.docx",
-            excel_data=data,
-            fields=fields,
-            mapping={field: field for field in fields},
-            output_folder=".",
-            filename_rule="preview.docx",
-            default_values={"自定义": "待补充"},
-            empty_field_behaviors={
-                "保留": "keep_variable",
-                "清空": "replace_empty",
-                "自定义": "custom",
-            },
-        )
+        with tempfile.TemporaryDirectory() as output_folder:
+            snippets = MergeService.generate_preview_snippets(
+                template_path="template.docx",
+                excel_data=data,
+                mapping={field: field for field in fields},
+                output_folder=output_folder,
+                filename_rule="preview.docx",
+                default_values={"自定义": "待补充"},
+                empty_field_behaviors={
+                    "保留": "keep_variable",
+                    "清空": "replace_empty",
+                    "自定义": "custom",
+                },
+            )
 
         preview_fields = {item["field"]: item for item in snippets[0]["fields"]}
         self.assertEqual(preview_fields["保留"]["empty_behavior"], "keep_variable")
@@ -208,6 +207,22 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertFalse(worker_c._inject_progress)
         self.assertTrue(worker_c._inject_cancel)
 
+    def test_task_worker_run_emits_result_and_finished(self):
+        """Worker lifecycle must always reach finished after a successful call."""
+        worker = TaskWorker(lambda: 8)
+        results = []
+        finished = []
+        errors = []
+        worker.signals.result.connect(results.append)
+        worker.signals.error.connect(errors.append)
+        worker.signals.finished.connect(lambda: finished.append(True))
+
+        worker.run()
+
+        self.assertEqual(results, [8])
+        self.assertEqual(errors, [])
+        self.assertEqual(finished, [True])
+
     def test_platform_capabilities_and_appearance(self):
         self.assertIsNotNone(CAPABILITIES.platform_name)
         self.assertIsInstance(CAPABILITIES.is_windows, bool)
@@ -247,6 +262,29 @@ class ApplicationServiceTests(unittest.TestCase):
             self.assertEqual(len(data.rows), 1)
             self.assertEqual(data.rows[0]["甲方名称"], "北京公司")
             self.assertEqual(mapping["甲方名称"], "甲方名称")
+
+    def test_full_mode_scans_docx_with_com_extractor(self):
+        template = SAMPLES / "合同模板.docx"
+        excel = SAMPLES / "合同数据.xlsx"
+        with (
+            patch(
+                "application.merge_service.CAPABILITIES",
+                SimpleNamespace(has_word_com=True),
+            ),
+            patch(
+                "application.merge_service.extract_template_fields_com",
+                return_value=["页眉变量"],
+            ) as extract_com,
+        ):
+            result = MergeService.scan_template_and_excel(
+                str(template),
+                str(excel),
+                use_com=True,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data[0], ["页眉变量"])
+        extract_com.assert_called_once_with(str(template))
 
 
 if __name__ == "__main__":

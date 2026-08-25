@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -11,7 +10,6 @@ from platform_adapter.capabilities import CAPABILITIES
 from ui.theme.tokens import ColorTokens, DARK_TOKENS, LIGHT_TOKENS
 
 try:
-    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QApplication
 
     HAS_QT = True
@@ -40,8 +38,14 @@ class ThemeManager:
         self.mode_preference = "dark" if self.is_dark else "light"
         self.tokens = DARK_TOKENS if self.is_dark else LIGHT_TOKENS
         self.apply_theme()
+        alive_listeners = []
         for cb in self._listeners:
-            cb(self.tokens)
+            try:
+                cb(self.tokens)
+                alive_listeners.append(cb)
+            except (RuntimeError, ReferenceError):
+                pass
+        self._listeners = alive_listeners
         return self.is_dark
 
     def check_system_theme_update(self) -> bool:
@@ -54,8 +58,14 @@ class ThemeManager:
             self.is_dark = current_system_dark
             self.tokens = DARK_TOKENS if self.is_dark else LIGHT_TOKENS
             self.apply_theme()
+            alive_listeners = []
             for cb in self._listeners:
-                cb(self.tokens)
+                try:
+                    cb(self.tokens)
+                    alive_listeners.append(cb)
+                except (RuntimeError, ReferenceError):
+                    pass
+            self._listeners = alive_listeners
             return True
         return False
 
@@ -134,3 +144,11 @@ class ThemeManager:
 
 
 THEME = ThemeManager("system")
+
+
+def set_theme_tone(widget, tone: str) -> None:
+    """Assign a semantic color role that is resolved by the active global QSS."""
+    widget.setProperty("themeTone", tone)
+    if HAS_QT:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)

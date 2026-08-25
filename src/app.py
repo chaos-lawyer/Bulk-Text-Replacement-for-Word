@@ -8,7 +8,6 @@ import sys
 from platform_adapter.capabilities import CAPABILITIES
 
 try:
-    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from ui.main_window import MainWindow
 

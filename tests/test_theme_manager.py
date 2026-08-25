@@ -56,6 +56,8 @@ class ThemeManagerTests(unittest.TestCase):
         self.assertIn("QScrollArea::viewport", qss)
         self.assertIn('isPageContent="true"', qss)
         self.assertIn(DARK_TOKENS.window_bg, qss)
+        self.assertIn('isActionBar="true"', qss)
+        self.assertIn('themeTone="secondary"', qss)
 
     def test_toggle_theme(self):
         manager = ThemeManager("light")
@@ -66,6 +68,28 @@ class ThemeManagerTests(unittest.TestCase):
         manager.toggle()
         self.assertFalse(manager.is_dark)
         self.assertEqual(manager.tokens.window_bg, LIGHT_TOKENS.window_bg)
+
+    def test_theme_toggle_updates_variable_panel_stylesheet(self):
+        try:
+            from PySide6.QtWidgets import QApplication
+            from ui.widgets.variable_popup import VariableInsertPanel
+            app = QApplication.instance() or QApplication([])
+        except ImportError:
+            return
+
+        THEME.mode_preference = "light"
+        THEME.is_dark = False
+        THEME.tokens = LIGHT_TOKENS
+
+        panel = VariableInsertPanel()
+        self.assertIn(LIGHT_TOKENS.card_bg, panel.styleSheet())
+
+        THEME.toggle()
+        self.assertIn(DARK_TOKENS.card_bg, panel.styleSheet())
+        self.assertNotIn(LIGHT_TOKENS.card_bg, panel.styleSheet())
+
+        # Restore light mode
+        THEME.toggle()
 
 
 if __name__ == "__main__":

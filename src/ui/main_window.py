@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from platform_adapter.capabilities import CAPABILITIES
 from ui.dialogs.help_dialog import HelpDialog
 from ui.pages.merge_page import MergePage
@@ -13,10 +12,9 @@ from ui.widgets.segmented_nav import SegmentedNav
 from ui.widgets.status_bar import FluentStatusBar
 
 try:
-    from PySide6.QtCore import Qt, QThreadPool, QTimer
+    from PySide6.QtCore import QTimer
     from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
     from PySide6.QtWidgets import (
-        QApplication,
         QHBoxLayout,
         QLabel,
         QMainWindow,
@@ -43,6 +41,9 @@ if HAS_QT:
             self.resize(920, 800)
             self.setMinimumSize(760, 620)
             self.setAccessibleName("Word 批量处理工具主窗口")
+            self._close_pending = False
+            self._force_close = False
+            self._close_wait_elapsed_ms = 0
 
             self._build_ui()
             self._setup_shortcuts()
@@ -178,44 +179,82 @@ if HAS_QT:
             dialog.exec()
 
         def _cancel_active_task(self):
+            from application.task_coordinator import TaskCoordinator
+            TaskCoordinator.instance().cancel_active_task()
             self.page_replace.cancel_active_task()
             self.page_merge.cancel_active_task()
             self.page_multi_doc.cancel_active_task()
 
         def closeEvent(self, event: QCloseEvent):
-            thread_pool = QThreadPool.globalInstance()
-            if thread_pool.activeThreadCount() > 0:
+            from application.task_coordinator import TaskCoordinator
+            coordinator = TaskCoordinator.instance()
+            if self._force_close:
+                event.accept()
+                return
+            if self._close_pending:
+                event.ignore()
+                return
+            if coordinator.is_busy:
+                desc = coordinator.active_task_description or "后台任务"
                 reply = QMessageBox.question(
                     self,
                     "任务正在运行",
-                    "当前有后台批量任务正在运行中。关闭窗口将请求取消并等待当前文件安全完成，确定要退出吗？",
+                    f"当前有后台任务【{desc}】正在运行中。关闭窗口将请求取消并等待当前文件安全完成，确定要退出吗？",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
                 )
                 if reply == QMessageBox.Yes:
                     self.status_bar.set_status("正在安全停止后台任务...", "warning")
                     self._cancel_active_task()
-
-                    # Wait up to 3 seconds for safe file write completion
-                    finished_cleanly = thread_pool.waitForDone(3000)
-                    if finished_cleanly:
-                        event.accept()
-                    else:
-                        force_reply = QMessageBox.warning(
-                            self,
-                            "任务尚未完全停止",
-                            "后台任务正在完成当前文件的磁盘保存操作。是否强制立即退出？",
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.No,
-                        )
-                        if force_reply == QMessageBox.Yes:
-                            event.accept()
-                        else:
-                            event.ignore()
+                    self._close_pending = True
+                    self._close_wait_elapsed_ms = 0
+                    event.ignore()
+                    QTimer.singleShot(100, self._poll_close_after_cancel)
                 else:
                     event.ignore()
             else:
                 event.accept()
+
+        def _poll_close_after_cancel(self):
+            """Wait for task cancellation without blocking the GUI event loop."""
+            from application.task_coordinator import TaskCoordinator
+
+            if not self._close_pending:
+                return
+            if not TaskCoordinator.instance().is_busy:
+                self._close_pending = False
+                self.close()
+                return
+
+            self._close_wait_elapsed_ms += 100
+            if self._close_wait_elapsed_ms < 3000:
+                QTimer.singleShot(100, self._poll_close_after_cancel)
+                return
+
+            coordinator = TaskCoordinator.instance()
+            if coordinator.is_write_busy:
+                QMessageBox.warning(
+                    self,
+                    "正在安全完成文件写入",
+                    "当前任务仍在保存文件。为避免文档损坏，暂不能强制退出，请等待当前文件完成后再关闭。",
+                )
+                self._close_pending = False
+                self.status_bar.set_status("正在安全完成文件写入...", "warning")
+                return
+
+            force_reply = QMessageBox.warning(
+                self,
+                "任务尚未完全停止",
+                "后台任务正在完成当前文件的磁盘保存操作。是否强制立即退出？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            self._close_pending = False
+            if force_reply == QMessageBox.Yes:
+                self._force_close = True
+                self.close()
+            else:
+                self.status_bar.set_status("后台任务仍在运行", "warning")
 
 
 
@@ -231,6 +270,10 @@ if HAS_QT:
             self.addAction(action_run)
 
         def _on_shortcut_preview(self):
+            from application.task_coordinator import TaskCoordinator
+            if not TaskCoordinator.instance().can_start_task(is_write=False):
+                return
+
             current = self.stacked_widget.currentWidget()
             if current == self.page_replace:
                 self.page_replace.preview_changes()
@@ -240,6 +283,10 @@ if HAS_QT:
                 self.page_multi_doc.preview_changes()
 
         def _on_shortcut_run(self):
+            from application.task_coordinator import TaskCoordinator
+            if not TaskCoordinator.instance().can_start_task(is_write=True):
+                return
+
             current = self.stacked_widget.currentWidget()
             if current == self.page_replace:
                 self.page_replace.start_replace()

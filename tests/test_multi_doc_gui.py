@@ -196,7 +196,7 @@ class MultiDocGUITests(unittest.TestCase):
         wb.save(multi_path)
         wb.close()
 
-        page.edt_template.setText(tmpl_path)
+        page.template_model.add_templates([tmpl_path])
         page.edt_excel.setText(multi_path)
 
         # Switch to second sheet
@@ -204,7 +204,7 @@ class MultiDocGUITests(unittest.TestCase):
         self.assertEqual(page.combo_sheet.currentText(), "合同数据")
 
         # Trigger scan
-        page.scan_template()
+        page.scan_templates()
         page._thread_pool.waitForDone(5000)
         app.processEvents()
 

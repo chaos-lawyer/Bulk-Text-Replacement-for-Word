@@ -431,25 +431,73 @@ class TemplateMergeTests(unittest.TestCase):
             data_table = load_table_data(excel_path, sheet_name="客户表")
             self.assertEqual(data_table.headers, ["客户名称", "联系人", "电话"])
 
-    def test_get_table_sheet_names_single_and_csv(self):
-        """Test get_table_sheet_names for single-sheet Excel and CSV files."""
-        from openpyxl import Workbook
+    def test_relative_output_root_directory_is_rejected(self):
+        """Verify that relative directory rules (e.g. relative/{{地区}}) raise ValueError."""
+        from core.template_merge import render_output_directory
+
+        # Relative root directory without absolute base folder
+        with self.assertRaises(ValueError) as ctx:
+            render_output_directory("relative/{{地区}}", {"地区": "华东"})
+        self.assertIn("绝对根目录", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx2:
+            render_output_directory("some_folder", {})
+        self.assertIn("绝对根目录", str(ctx2.exception))
+
+    def test_build_template_context_with_keep_variable(self):
+        """Verify build_template_context preserves {{field}} when behavior is keep_variable."""
+        from core.models import TemplateMergeItem
+        from core.template_merge import build_template_context
+
+        tmpl = TemplateMergeItem(template_id="t1", file_path="/tmp/test.docx", display_name="测试模板")
+        row = {"客户姓名": "张三", "合同金额": ""}
+        mapping = {"客户姓名": "客户姓名", "合同金额": "合同金额"}
+        empty_behaviors = {"合同金额": "keep_variable"}
+
+        ctx = build_template_context(
+            template=tmpl,
+            row=row,
+            excel_row=2,
+            data_index=1,
+            mapping=mapping,
+            empty_field_behaviors=empty_behaviors,
+        )
+
+        self.assertEqual(ctx["客户姓名"], "张三")
+        self.assertEqual(ctx["合同金额"], "{{合同金额}}")
+
+    def test_create_merge_plan_returns_structured_result_and_detects_conflicts(self):
+        """Verify create_merge_plan returns MergePlanResult with jobs and issues."""
+        from core.models import ExcelData, TemplateMergeItem
+        from core.template_merge import create_merge_plan
 
         with tempfile.TemporaryDirectory() as folder:
-            # Single sheet Excel
-            excel_path = Path(folder) / "single_sheet.xlsx"
-            wb = Workbook()
-            wb.save(excel_path)
-            wb.close()
-            self.assertEqual(get_table_sheet_names(excel_path), ["Sheet"])
+            tmpl1 = TemplateMergeItem(
+                template_id="t1",
+                file_path=str(Path(folder) / "采购合同.docx"),
+                display_name="采购合同",
+                filename_rule=f"{folder}/同一文件名",
+                enabled=True,
+            )
+            tmpl2 = TemplateMergeItem(
+                template_id="t2",
+                file_path=str(Path(folder) / "保密协议.docx"),
+                display_name="保密协议",
+                filename_rule=f"{folder}/同一文件名",
+                enabled=True,
+            )
+            data = ExcelData(headers=["客户"], rows=[{"客户": "甲"}], excel_rows=[2])
+            mapping = {"客户": "客户"}
 
-            # CSV file
-            csv_path = Path(folder) / "test.csv"
-            csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
-            self.assertEqual(get_table_sheet_names(csv_path), [])
-
-            # Non-existent file
-            self.assertEqual(get_table_sheet_names(Path(folder) / "missing.xlsx"), [])
+            plan_res = create_merge_plan([tmpl1, tmpl2], data, mapping)
+            self.assertEqual(len(plan_res.jobs), 2)
+            self.assertEqual(plan_res.jobs[0].filename, "同一文件名.docx")
+            self.assertEqual(plan_res.jobs[1].filename, "同一文件名 (2).docx")
+            self.assertEqual(len(plan_res.issues), 1)
+            self.assertEqual(plan_res.issues[0].code, "NAME_COLLISION")
+            self.assertEqual(len(plan_res.batch_conflicts), 1)
+            self.assertEqual(plan_res.batch_conflicts[0]["requested"], "同一文件名.docx")
+            self.assertEqual(plan_res.batch_conflicts[0]["assigned"], "同一文件名 (2).docx")
 
 
 if __name__ == "__main__":
